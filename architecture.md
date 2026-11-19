@@ -3,11 +3,19 @@
 | | |
 |---|---|
 | **Serwis** | 1. Atrakcje |
-| **Wersja dokumentu** | 0.2 (szkic) |
+| **Wersja dokumentu** | 0.3 (szkic) |
 | **Data** | 2026-11-19 |
 | **Klient serwisu** | 5. Planer i integracja |
-| **Zależności** | 4. Warunki dnia, 3. Transport |
+| **Zależności** | 4. Warunki dnia, 3. Transport, opcjonalnie Discovery |
 | **Stos** | Java 25, Spring Boot 4.1, JPA, Spring Security, PostgreSQL, Flyway |
+
+---
+
+## Zakres demonstracyjny
+
+Aplikacja uruchamiana przez `docker compose up --build` używa domyślnie profili `local,mock`. Docker publikuje port kontenera 8001 na porcie hosta 8000 na wszystkich interfejsach. Katalog czterech atrakcji jest przechowywany w pamięci, a profil `mock` udostępnia stałą prognozę i symetryczne odcinki z punktu `start` według tabeli Transportu. W tym wariancie health checki sprawdzają stan aplikacji, a datę walidujemy w strefie `Europe/Warsaw`.
+
+Docelowe połączenie z bazą opisuje [kontrakt PostgreSQL](contracts/database.md). Specyfikacja [OpenAPI zależności](contracts/downstream.openapi.yaml) opisuje wywołania z [kontraktu Transportu](contract_transport.md), [kontraktu Pogody](kontrakt-pogoda.md) i [kontraktu Discovery](KONTRAKT_discovery.txt). Etapy podłączenia zależności opisuje [plan implementacji](implementation-plan.md).
 
 ---
 
@@ -51,12 +59,14 @@ Strzałka prowadzi od klienta do dostawcy. Atrakcje są **klientem** Warunków d
 
 1. **Planer → Atrakcje:** prośba o propozycje na dzień → wybór pierwszej atrakcji. ← *ten serwis*
 2. Planer → Gastronomia: posiłki z dojazdem od pierwszej atrakcji (Planer przekazuje `location.id` zwrócone przez Atrakcje).
-3. Planer → Transport: pozostałe odcinki (lokal → druga atrakcja → start).
+3. Planer → Transport: kolejne odcinki obsługiwane przez Transport. Bieżący kontrakt obsługuje wyłącznie odcinki od lub do `start` oraz przejazd w obrębie jednego punktu.
 4. Planer: kontrola budżetu i godzin.
 
 ---
 
 ## 3. API
+
+Identyfikatory pokazowego katalogu to `ATR01`, `ATR02`, `ATR03` i `ATR04`. Pole `location.id` nadal przyjmuje identyfikatory lokalizacji Transportu `attr-01`–`attr-04`.
 
 Bazowy prefiks: **`/api/v1`** (obowiązkowy dla wszystkich endpointów biznesowych). Format: JSON, UTF-8. Waluta: PLN, kwoty zaokrąglane do 2 miejsc po przecinku (HALF_UP).
 
@@ -68,7 +78,7 @@ Bazowy prefiks: **`/api/v1`** (obowiązkowy dla wszystkich endpointów biznesowy
 |---|---|---|---|---|
 | `date` | `YYYY-MM-DD` | tak | – | Data planu, nie wcześniejsza niż dzisiejsza; przekazywana do Warunków dnia |
 | `maxCost` | liczba ≥ 0 | nie | brak limitu | Maks. łączny koszt dla grupy (bilety + dojazd + powrót) |
-| `mode` | `walk` \| `transit` \| `car` | tak | – | Sposób podróży; przekazywany do Transportu |
+| `mode` | `walk` \| `transit` \| `car` | tak | – | Sposób podróży; mapowanie na tryby Transportu w sekcji 4.2 |
 | `people` | int 1–20 | nie | `1` | Liczba osób |
 | `category` | string (lista kodów po przecinku) | nie | wszystkie | Filtr kategorii, np. `museum,park` |
 | `startLat` | float [-90, 90] | tak | – | Szerokość geograficzna punktu startowego |
@@ -78,18 +88,18 @@ Bazowy prefiks: **`/api/v1`** (obowiązkowy dla wszystkich endpointów biznesowy
 Przykład:
 
 ```
-GET /api/v1/attractions/proposals?date=2026-06-14&maxCost=200&mode=transit&people=3&category=museum&startLat=52.2297&startLng=21.0122&limit=5
+GET /api/v1/attractions/proposals?date=2027-06-13&maxCost=200&mode=transit&people=3&category=museum&startLat=52.2297&startLng=21.0122&limit=5
 ```
 
 #### Odpowiedź `200 OK`
 
 ```json
 {
-  "date": "2026-06-14",
+  "date": "2027-06-13",
   "start": {
     "lat": 52.2297,
     "lng": 21.0122,
-    "resolvedLocationId": "LOC_HOTEL_CENTRUM"
+    "resolvedLocationId": "start"
   },
   "mode": "transit",
   "people": 3,
@@ -97,18 +107,18 @@ GET /api/v1/attractions/proposals?date=2026-06-14&maxCost=200&mode=transit&peopl
   "transport": { "source": "ok" },
   "proposals": [
     {
-      "id": "ATR_001",
+      "id": "ATR01",
       "name": "Muzeum Narodowe",
       "category": "museum",
-      "location": { "id": "LOC_MUZ_NAR", "lat": 52.2316, "lng": 21.0247 },
+      "location": { "id": "attr-01", "lat": 52.2316, "lng": 21.0247 },
       "indoor": true,
       "weatherFit": "good",
       "visitDurationMin": 90,
       "openingHours": { "open": "10:00", "close": "18:00" },
       "ticket":    { "perPerson": 25.00, "total": 75.00 },
-      "fromStart": { "timeMin": 18, "costPerPerson": 4.40, "costTotal": 13.20 },
-      "toStart":   { "timeMin": 20, "costPerPerson": 4.40, "costTotal": 13.20 },
-      "estimate":  { "totalTimeMin": 128, "totalCost": 101.40, "complete": true }
+      "fromStart": { "timeMin": 9, "costPerPerson": 4.80, "costTotal": 14.40 },
+      "toStart":   { "timeMin": 9, "costPerPerson": 4.80, "costTotal": 14.40 },
+      "estimate":  { "totalTimeMin": 108, "totalCost": 103.80, "complete": true }
     }
   ]
 }
@@ -127,26 +137,26 @@ Przy niedostępnych zależnościach (patrz 6):
 |---|---|
 | `start.resolvedLocationId` | Lokalizacja z katalogu przypisana do współrzędnych startu (patrz 5.2) |
 | `weather` | Warunki dnia użyte do doboru; `source`: `ok` \| `unavailable` |
-| `transport.source` | `ok` \| `unavailable` – czy Transport odpowiedział (brak pojedynczego odcinka nie zmienia tej flagi) |
+| `transport.source` | `ok` \| `unavailable` – czy uzyskano odpowiedź Transportu. Gdy kandydatów brak, flaga pozostaje `ok` i zapytanie jest pomijane |
 | `location.id` | Identyfikator wspólny z Transportem; Planer przekazuje go do Gastronomii i Transportu |
 | `weatherFit` | `good` \| `ok` \| `poor` \| `null` (gdy brak pogody) |
 | `openingHours` | Godziny otwarcia w dniu `date`; `null`, gdy atrakcja nie ma zdefiniowanych godzin (traktowana jako otwarta cały dzień, patrz 5.4) |
 | `ticket.perPerson` / `ticket.total` | Cena biletu dla jednej osoby / × `people` |
 | `fromStart` | Dojazd **ze startu do atrakcji** w trybie `mode`: `timeMin` – czas w minutach, `costPerPerson` – koszt jednej osoby, `costTotal` – koszt grupy |
-| `toStart` | Szacowany **powrót z atrakcji do startu**; pytamy Transport o odcinek w odwrotnym kierunku (czas może się różnić) |
+| `toStart` | Szacowany **powrót z atrakcji do startu**; ten sam czas i koszt co w `fromStart` dzięki symetrii odcinków |
 | `estimate.totalTimeMin` | `fromStart.timeMin + visitDurationMin + toStart.timeMin` (brakujące składniki pomijane) |
 | `estimate.totalCost` | `ticket.total + fromStart.costTotal + toStart.costTotal` (brakujące składniki pomijane) |
 | `estimate.complete` | `false`, gdy `fromStart` lub `toStart` jest `null` – szacunek obejmuje wtedy tylko znane składniki |
 
-`fromStart` / `toStart` mają wartość `null`, gdy Transport nie zna danego odcinka lub jest niedostępny.
+`fromStart` / `toStart` mają wartość `null` przy niedostępności Transportu. Status `NO_CONNECTION` wyklucza daną atrakcję z propozycji.
 
 **Zasady liczenia kosztu dojazdu dla grupy:**
 
 | `mode` | `costPerPerson` | `costTotal` |
 |---|---|---|
 | `walk` | `0` | `0` |
-| `transit` | `cost` z Transportu | `costPerPerson × people` |
-| `car` | `costTotal / people` | `cost` z Transportu – koszt jednego pojazdu (bez mnożenia przez `people`; patrz otwarta kwestia 8) |
+| `transit` | `costGrosze / 100` (4,80 PLN za odcinek) | `costPerPerson × people` |
+| `car` | `costGrosze / 100` (taxi, koszt jednej osoby) | `costPerPerson × people` |
 
 `estimate` to szacunek dla wariantu „tylko ta jedna atrakcja”. Finalny budżet i czas dnia liczy Planer.
 
@@ -189,48 +199,54 @@ Niedostępność zależności **nie** powoduje błędu – serwis degraduje odpo
 
 ## 4. Kontrakty z zależnościami
 
-> Warunki dnia i Transport nie zależą od nikogo, więc jako pierwsze udostępniają przykładowe odpowiedzi. Atrakcje rozwijamy na mockach tych odpowiedzi (profil `mock`, testy z WireMock).
+Bez profilu `mock` Atrakcje korzystają z klientów HTTP. Profil `mock` udostępnia przykładowe dane, a testy WireMock sprawdzają format wywołań do zależności.
 
 ### 4.1. Warunki dnia
 
-```
-GET /weather?date=2026-06-14
-```
-
-```json
-{ "date": "2026-06-14", "condition": "rain", "tempC": 14, "precipitationMm": 6 }
-```
-
-Oczekiwane wartości `condition`: `sun`, `cloudy`, `rain`, `snow` (do uzgodnienia jako wspólny słownik). Nieznana wartość `condition` jest traktowana jak brak danych (`weatherFit = null`) i logowana jako ostrzeżenie.
-
-### 4.2. Transport
-
-Preferowany wariant – zapytanie zbiorcze (jedno wywołanie zamiast 2 × N):
+Źródłem kontraktu jest [kontrakt Pogody](kontrakt-pogoda.md). Atrakcje korzystają z wariantu jednodniowego, przekazując datę i współrzędne startu podane przez Planer.
 
 ```
-POST /segments/batch
+GET /api/weather/day?lat=52.2297&lon=21.0122&date=2026-11-20
 ```
 
 ```json
 {
-  "mode": "transit",
-  "pairs": [
-    { "from": "LOC_HOTEL_CENTRUM", "to": "LOC_MUZ_NAR" },
-    { "from": "LOC_MUZ_NAR", "to": "LOC_HOTEL_CENTRUM" }
-  ]
+  "location": { "name": null, "lat": 52.2297, "lon": 21.0122 },
+  "days": [
+    { "date": "2026-11-20", "tempMin": 2.1, "tempMax": 7.4,
+      "precipitationMm": 3.2, "windKph": 18.0, "category": "RAIN" }
+  ],
+  "stale": false
+}
+```
+
+Klient mapuje `SUNNY`, `CLOUDY`, `RAIN`, `SNOW`, `STORM` na `sun`, `cloudy`, `rain`, `snow`, `storm`. Pole `tempC` to średnia `tempMin` i `tempMax` zaokrąglona do liczby całkowitej metodą `HALF_UP`. Dopuszczalne dane z `stale: true` są przetwarzane tak samo. Nieznana kategoria, brak prognozy dla żądanej daty lub błąd HTTP oznaczają niedostępność danych. Dla dat po dziś + 15 dni klient pomija wywołanie i zwraca tę samą informację o niedostępności. Adres i port dostawcy wymagają konfiguracji.
+
+### 4.2. Transport
+
+Źródłem kontraktu jest [contract_transport.md](contract_transport.md). Atrakcje wysyłają jedno `POST /api/v1/routes` z tablicą od 1 do 500 par pól `fromLocationId` i `toLocationId`. Tryby Planera `walk`, `transit` i `car` mapują się odpowiednio na `WALK`, `PUBLIC_TRANSPORT` i `CAR`.
+
+```json
+{
+  "mode": "PUBLIC_TRANSPORT",
+  "pairs": [{ "fromLocationId": "start", "toLocationId": "attr-01" }]
 }
 ```
 
 ```json
-[
-  { "from": "LOC_HOTEL_CENTRUM", "to": "LOC_MUZ_NAR", "timeMin": 18, "cost": 4.4 },
-  { "from": "LOC_MUZ_NAR", "to": "LOC_HOTEL_CENTRUM", "timeMin": 20, "cost": 4.4 }
-]
+{
+  "mode": "PUBLIC_TRANSPORT",
+  "results": [
+    { "fromLocationId": "start", "toLocationId": "attr-01", "status": "OK", "durationMin": 9, "costGrosze": 480 }
+  ]
+}
 ```
 
-Para nieobecna w odpowiedzi = odcinek nieznany. Wariant zapasowy: `GET /segments?from=&to=&mode=` wywoływany równolegle dla każdej pary.
+Odpowiedź zachowuje liczbę i kolejność par. Symetria pozwala użyć jednego wyniku dla dojazdu i powrotu. Przy `NO_CONNECTION` odpowiedź ma kod `200`, a wynik tej pary pomija pola `durationMin` i `costGrosze`. Błędy `400` oraz `500` zawierają odpowiednio `BAD_REQUEST` i `INTERNAL_ERROR` w polu `error`, a szczegóły w `message`. Zalecany timeout to 2 s.
 
-Do uzgodnienia: czy `cost` jest za osobę (`transit`) czy za pojazd (`car`).
+### 4.3. Discovery
+
+Po ustawieniu `APP_DISCOVERY_URL` klienci pytają o IP przez `GET /services/{name}`. Zachowują schemat i port skonfigurowanego adresu usługi. Przy braku wpisu, błędzie lub przekroczeniu 2 s używają skonfigurowanego adresu awaryjnego. Jeśli ustawiono też `APP_DISCOVERY_ADVERTISE_IP`, aplikacja cyklicznie wysyła `POST /services` z nazwą `attractions` i IP hosta. Dzięki temu wpis jest odtwarzany po restarcie rejestru. Ponieważ Discovery nadpisuje wpis dla tej samej nazwy, przy wielu replikach należy publikować wspólne IP punktu wejściowego. Pełny format rejestru opisuje [kontrakt Discovery](KONTRAKT_discovery.txt).
 
 ---
 
@@ -250,14 +266,14 @@ sequenceDiagram
     A->>A: uwierzytelnienie, walidacja parametrów
     A->>C: lokalizacje, atrakcje, godziny otwarcia (przy pustym cache → PostgreSQL)
     C-->>A: katalog
-    A->>A: najbliższa lokalizacja do startu → resolvedLocationId
+    A->>A: porównanie współrzędnych z punktem start → resolvedLocationId
     A->>A: filtr (active, category, otwarte w dniu), MAX_CANDIDATES najbliższych
     par równolegle
-        A->>W: GET /weather?date
-        W-->>A: condition, tempC
+        A->>W: GET /api/weather/day?lat&lon&date
+        W-->>A: days (category, tempMin, tempMax)
     and
-        A->>T: POST /segments/batch (start↔kandydat, oba kierunki)
-        T-->>A: timeMin, cost
+        A->>T: POST /api/v1/routes (start → kandydat, odcinek symetryczny)
+        T-->>A: results (status, durationMin, costGrosze)
     end
     A->>A: weatherFit, koszty grupy, estimate
     A->>A: filtr maxCost, sortowanie, limit
@@ -268,9 +284,7 @@ Wywołania W i T są wykonywane poza transakcją bazodanową.
 
 ### 5.2. Rozwiązanie punktu startowego
 
-Transport operuje na tabeli odcinków między **znanymi lokalizacjami**, a Planer przesyła **współrzędne**. Serwis przypisuje współrzędne do najbliższej lokalizacji z tabeli `locations` (odległość haversine, liczona w aplikacji na zbuforowanej liście lokalizacji). Jeśli najbliższa lokalizacja jest dalej niż `APP_START_MAX_DISTANCE_M` (np. 1000 m) → `422 START_NOT_RESOLVED`.
-
-> Alternatywa: Transport przyjmuje współrzędne bezpośrednio. Wtedy krok 5.2 znika, a `resolvedLocationId` nie jest zwracane. **Decyzja do podjęcia z zespołem Transportu.**
+Transport ma jeden punkt startowy i końcowy o identyfikatorze `start`. Atrakcje porównują współrzędne Planera z katalogowymi współrzędnymi tego punktu metodą haversine. Odległość większa niż `APP_START_MAX_DISTANCE_M` (domyślnie 1000 m) albo brak punktu `start` w katalogu skutkują odpowiedzią `422 START_NOT_RESOLVED`. Po udanym dopasowaniu `resolvedLocationId` ma wartość `start`.
 
 ### 5.3. Dopasowanie do pogody (`weatherFit`)
 
@@ -280,6 +294,7 @@ Transport operuje na tabeli odcinków między **znanymi lokalizacjami**, a Plane
 | `cloudy` | `good` | `good` |
 | `rain` | `good` | `poor` |
 | `snow` | `good` | `poor` |
+| `storm` | `good` | `poor` |
 | brak danych / nieznana wartość | `null` | `null` |
 
 ### 5.4. Filtrowanie i sortowanie
@@ -288,8 +303,8 @@ Transport operuje na tabeli odcinków między **znanymi lokalizacjami**, a Plane
    - atrakcja **bez żadnych** wierszy w `opening_hours` → traktowana jako otwarta cały dzień (`openingHours = null`),
    - atrakcja z wierszami, ale **bez wiersza** dla dnia tygodnia `date` → zamknięta, odrzucana.
    Dzień tygodnia według ISO-8601: 1 = poniedziałek … 7 = niedziela.
-2. **Wstępna selekcja:** spośród pozostałych zostaje `APP_MAX_CANDIDATES` (domyślnie 50, nie mniej niż maks. `limit`) najbliższych startowi w linii prostej (haversine). Ogranicza to zapytanie do Transportu do 2 × `APP_MAX_CANDIDATES` par niezależnie od wielkości katalogu.
-3. **Wyliczenie** `ticket`, `fromStart`, `toStart`, `estimate` (reguły z 3.1).
+2. **Wstępna selekcja:** spośród pozostałych zostaje `APP_MAX_CANDIDATES` (domyślnie 50, nie mniej niż maks. `limit`) najbliższych startowi w linii prostej (haversine). Wysyłamy maksymalnie jedną parę na lokalizację kandydata. `APP_MAX_CANDIDATES` mieści się w zakresie 50–500. Gdy kandydatów brak, pomijamy wywołanie Transportu.
+3. **Wyliczenie** dla tras z `OK` lub przy niedostępności Transportu: `ticket`, `fromStart`, `toStart`, `estimate` (reguły z 3.1).
 4. **Filtr `maxCost`** (jeśli podano): odrzucamy, gdy `estimate.totalCost > maxCost`. Dla `estimate.complete = false` porównujemy tylko znane składniki – pozycja nie jest odrzucana z powodu nieznanego kosztu dojazdu.
 5. **Sortowanie** (kolejne klucze):
    1. `estimate.complete` – najpierw `true`,
@@ -306,11 +321,14 @@ Transport operuje na tabeli odcinków między **znanymi lokalizacjami**, a Plane
 |---|---|
 | Warunki dnia nie odpowiadają / błąd | `weather.source = "unavailable"`, `condition = tempC = null`, `weatherFit = null` (drugi klucz sortowania z 5.4 nie różnicuje pozycji) |
 | Transport nie odpowiada | `transport.source = "unavailable"`, `fromStart = toStart = null`, `estimate.complete = false` (liczone tylko z biletów i czasu zwiedzania) |
-| Brak konkretnego odcinka w Transporcie | `null` tylko dla tej atrakcji, `transport.source` pozostaje `ok` |
-| Timeout zależności | `APP_DEPENDENCY_TIMEOUT_MS` (np. 2000 ms), bez ponowień |
+| `NO_CONNECTION` dla konkretnego odcinka | Atrakcja zostaje pominięta, a `transport.source` pozostaje `ok` |
+| Timeout zależności | `APP_DISCOVERY_URL` | `http://172.20.147.20:8080` | Opcjonalny adres rejestru Discovery |
+| `APP_DISCOVERY_ADVERTISE_IP` | `172.20.147.24` | IP hosta lub punktu wejściowego. Pusta wartość wyłącza rejestrację |
+| `APP_DISCOVERY_REGISTRATION_INTERVAL_MS` | `60000` | Odstęp między zakończeniem rejestracji a jej ponowieniem |
+| `APP_DEPENDENCY_TIMEOUT_MS` (np. 2000 ms), bez ponowień |
 | Seria błędów zależności | Circuit breaker (Resilience4j) per zależność: po przekroczeniu progu błędów wywołania są pomijane na czas `APP_CIRCUIT_OPEN_MS` i od razu stosowana jest degradacja |
 
-Planer zawsze dostaje `200`, o ile parametry są poprawne – decyzję o pominięciu niepełnych propozycji podejmuje sam.
+Awaria zależności skutkuje odpowiedzią `200` z niepełnymi danymi po poprawnej walidacji i przypisaniu startu. Planer decyduje, czy wykorzystać niepełne propozycje.
 
 ### 6.1. Health-check
 
@@ -415,7 +433,7 @@ CREATE INDEX idx_attr_category ON attractions(category_id);
 CREATE INDEX idx_attr_location ON attractions(location_id);
 ```
 
-Dane przykładowe ładowane są migracją `V2__seed.sql`. Te same dane wykorzystują testy integracyjne (Testcontainers).
+Docelowe dane startowe będą ładowane migracją `V2__seed.sql` i wykorzystywane w testach z PostgreSQL. Demonstracja korzysta z danych katalogu zapisanych w kodzie.
 
 ---
 
@@ -457,8 +475,11 @@ flowchart TB
 | `SPRING_DATASOURCE_URL` | `jdbc:postgresql://db:5432/attractions` | Połączenie z bazą |
 | `SPRING_DATASOURCE_USERNAME` / `SPRING_DATASOURCE_PASSWORD` | `attractions` / *(sekret)* | Dane dostępowe do bazy |
 | `SPRING_PROFILES_ACTIVE` | `mock` | `mock` – lokalne mocki W i T; `local` – wyłączone uwierzytelnianie |
-| `APP_WEATHER_URL` | `http://weather:8004` | Adres Warunków dnia |
-| `APP_TRANSPORT_URL` | `http://transport:8003` | Adres Transportu |
+| `APP_WEATHER_URL` | *(adres dostawcy)* | Adres Warunków dnia. Pusta wartość oznacza brak prognozy |
+| `APP_TRANSPORT_URL` | `http://172.20.147.17:8083` | Adres Transportu |
+| `APP_DISCOVERY_URL` | `http://172.20.147.20:8080` | Opcjonalny adres rejestru Discovery |
+| `APP_DISCOVERY_ADVERTISE_IP` | `172.20.147.24` | IP hosta lub punktu wejściowego. Pusta wartość wyłącza rejestrację |
+| `APP_DISCOVERY_REGISTRATION_INTERVAL_MS` | `60000` | Odstęp między zakończeniem rejestracji a jej ponowieniem |
 | `APP_DEPENDENCY_TIMEOUT_MS` | `2000` | Timeout wywołań zależności |
 | `APP_CIRCUIT_OPEN_MS` | `30000` | Czas otwarcia circuit breakera |
 | `APP_START_MAX_DISTANCE_M` | `1000` | Maks. odległość przy przypisaniu startu |
@@ -509,13 +530,9 @@ flowchart TB
 
 | # | Kwestia | Z kim |
 |---|---|---|
-| 1 | Wspólna lista `locationId` (atrakcje + punkty startowe) w tabeli odcinków | Transport |
-| 2 | Współrzędne startu: mapowanie po naszej stronie czy po stronie Transportu | Transport |
-| 3 | Czy `cost` w Transporcie jest za osobę czy za pojazd (`car`) | Transport |
-| 4 | Dostępność `POST /segments/batch` | Transport |
-| 5 | Wspólny słownik `mode` i `condition` | Wszyscy |
+| 1 | Docelowe `locationId` atrakcji i ich odległości od `start` | Transport |
+| 5 | Wspólny słownik `condition` | Wszyscy |
 | 6 | Czy `opening_hours` wchodzi do zakresu | Zespół |
 | 7 | Czy `maxCost` ma obejmować powrót, czy tylko dojazd + bilety | Planer |
-| 8 | `car` dla grup większych niż jeden pojazd (np. > 5 osób) – wiele pojazdów? | Planer, Transport |
 | 9 | Wspólny serwer autoryzacji i uprawnienia (`scope`) dla wywołań między serwisami | Wszyscy |
 | 10 | Horyzont prognozy pogody – jak daleko w przód może być `date` | Warunki dnia |
