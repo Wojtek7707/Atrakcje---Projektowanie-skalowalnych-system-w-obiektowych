@@ -1,0 +1,91 @@
+DISCOVERY SERVICE (grupa 1, planer wycieczek)
+Kontakt: Paweł Tyburski
+
+Adres: http://172.20.147.20:8080
+Format: HTTP + JSON
+Rejestr przechowuje tylko nazwę serwisu i IP (bez portów).
+Dostawca: Discovery. Klienci: wszystkie zespoły.
+
+
+NAZWY SERWISÓW (małymi literami) I ADRESY AWARYJNE
+
+attractions   172.20.147.24   (1. Atrakcje)
+gastronomy    172.20.147.27   (2. Gastronomia)
+transport     172.20.147.17   (3. Transport)
+weather       172.20.147.21   (4. Warunki dnia)
+planner       172.20.147.14   (5. Planer i integracja)
+
+
+1. REJESTRACJA: POST /services
+
+IP jest odczytywane z połączenia, więc rejestrujesz się z komputera, na którym działa Twój serwis.
+Ponowna rejestracja tej samej nazwy nadpisuje IP.
+
+Żądanie:
+POST /services
+Content-Type: application/json
+{"name": "transport"}
+
+Odpowiedź 201 (pierwsza rejestracja) albo 200 (nadpisanie):
+{"name": "transport", "ip": "172.20.147.17", "registeredAt": "2026-11-19T10:30:00Z"}
+
+Opcjonalnie IP można podać wprost (np. rejestracja z innego komputera):
+{"name": "transport", "ip": "172.20.147.17"}
+
+Brak nazwy: 400
+{"error": "name is required"}
+
+
+2. WYREJESTROWANIE: DELETE /services/{name}
+
+Żądanie:
+DELETE /services/transport
+
+Odpowiedź: 204 (bez treści)
+Nieznana nazwa: 404
+{"error": "service not found: transport"}
+
+
+3. ZAPYTANIE O IP: GET /services/{name}
+
+Żądanie:
+GET /services/transport
+
+Odpowiedź 200:
+{"name": "transport", "ip": "172.20.147.17", "registeredAt": "2026-11-19T10:30:00Z"}
+
+Nieznana nazwa: 404
+{"error": "service not found: transport"}
+
+
+4. LISTA WSZYSTKICH: GET /services
+
+Odpowiedź 200:
+[{"name": "transport", "ip": "172.20.147.17", "registeredAt": "2026-11-19T10:30:00Z"}]
+Gdy nikt się nie zarejestrował: []
+
+
+ZASADY DLA KLIENTÓW
+
+1. Limit oczekiwania na odpowiedź discovery: 2 s.
+2. Discovery niedostępne (timeout, brak połączenia) albo 404: używasz IP z listy wyżej. Discovery nikogo nie blokuje.
+3. Na start wszyscy mają IP wpisane na stałe. Na discovery przełączamy się, gdy integracja już działa.
+4. 404 znaczy "serwis się nie zarejestrował", a nie "serwis nie działa".
+5. Po restarcie discovery rejestr jest pusty: zarejestruj się ponownie.
+
+
+GOTOWE KOMENDY (curl, uruchom na komputerze swojego serwisu)
+
+Rejestracja:
+curl -X POST http://172.20.147.20:8080/services -H "Content-Type: application/json" -d '{"name":"transport"}'
+
+Zapytanie o IP:
+curl http://172.20.147.20:8080/services/transport
+
+Lista wszystkich:
+curl http://172.20.147.20:8080/services
+
+Wyrejestrowanie:
+curl -X DELETE http://172.20.147.20:8080/services/transport
+
+(w miejsce "transport" wpisz nazwę swojego serwisu z listy wyżej)
